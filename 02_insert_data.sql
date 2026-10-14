@@ -48,13 +48,14 @@ INSERT INTO medical_record (patient_id, doctor_id, reg_id, visit_date, diagnosis
 (5, 6, 5, '2026-09-04 09:00:00', '右膝关节骨性关节炎',     '双氯芬酸钠缓释片',     '避免剧烈运动');
 
 -- 药品
-INSERT INTO medicine (medicine_name, spec, unit, price, stock, manufacturer) VALUES
-('苯磺酸氨氯地平片', '5mg*7片',  '盒', 28.50, 500, '国药集团'),
-('头孢克肟胶囊',     '0.1g*12粒','盒', 35.00, 300, '石药集团'),
-('小儿氨酚黄那敏颗粒','6g*10袋', '盒', 18.00, 800, '哈药集团'),
-('双氯芬酸钠缓释片', '0.1g*12片','盒', 22.80, 400, '扬子江药业'),
-('阿莫西林胶囊',     '0.25g*24粒','盒',16.50, 600, '华北制药'),
-('布洛芬缓释胶囊',   '0.3g*20粒','盒', 25.00, 450, '中美史克');
+-- 药品（分类用于药品管理页的筛选；完整 60 种见 04_seed_demo_data.sql）
+INSERT INTO medicine (medicine_name, category, spec, unit, price, stock, manufacturer) VALUES
+('苯磺酸氨氯地平片', '心血管系统用药', '5mg*7片',  '盒', 28.50, 500, '国药集团'),
+('头孢克肟分散片',   '抗感染用药',     '0.1g*12片','盒', 35.00, 300, '石药集团'),
+('小儿氨酚黄那敏颗粒','解热镇痛抗炎药','6g*10袋', '盒', 18.00, 800, '哈药集团'),
+('双氯芬酸钠缓释片', '解热镇痛抗炎药', '0.1g*12片','盒', 22.80, 400, '扬子江药业'),
+('阿莫西林胶囊',     '抗感染用药',     '0.25g*24粒','盒',16.50, 600, '华北制药'),
+('布洛芬缓释胶囊',   '解热镇痛抗炎药', '0.3g*20粒','盒', 25.00, 450, '中美史克');
 
 -- 处方明细
 INSERT INTO prescription_detail (record_id, medicine_id, quantity, dosage) VALUES
@@ -62,5 +63,15 @@ INSERT INTO prescription_detail (record_id, medicine_id, quantity, dosage) VALUE
 (2, 2, 1, '每日2次，每次1粒，口服'),
 (3, 3, 1, '每日3次，每次1袋，温水冲服'),
 (4, 4, 2, '每日1次，每次1片，饭后服用');
+
+-- 住院登记（同一患者可以住多次；"在院"的记录同时最多只能有一条）
+-- 注意：current_patient_id 是生成列，由数据库自己算，插入时不能写
+INSERT INTO admission
+    (admission_no, patient_id, dept_id, doctor_id, bed_no, admit_diagnosis,
+     admit_time, discharge_time, status, discharge_summary, admit_operator, discharge_operator) VALUES
+('ZY202609010001', 1, 1, 1, '内科-08', '原发性高血压（2级）',   '2026-09-01 09:20:00', '2026-09-08 10:00:00', '已出院', '血压平稳，准予出院', 'gh01', 'gh01'),
+('ZY202609120001', 1, 1, 2, '内科-12', '社区获得性肺炎',         '2026-09-12 14:05:00', '2026-09-20 09:30:00', '已出院', '感染控制，准予出院', 'gh01', 'gh01'),
+('ZY202609040001', 5, 5, 6, '骨科-05', '右膝关节骨性关节炎',     '2026-09-04 08:40:00', '2026-09-15 11:00:00', '已出院', '疼痛缓解，准予出院', 'gh01', 'gh01'),
+('ZY202610120001', 3, 3, 4, '儿科-06', '支气管肺炎',             '2026-10-12 09:10:00', NULL,                  '在院',   NULL,                 'gh01', NULL);
 
 SELECT '测试数据插入完成' AS message;

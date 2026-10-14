@@ -1,12 +1,78 @@
 """
 用 SQLite 验证数据库设计逻辑（无需安装 MySQL）
+
 说明：SQLite 语法与 MySQL 基本兼容，本项目仅用于本地验证表结构与查询逻辑。
+两边确实不同的地方，由下面 translate_functions() 做等价替换，
+这样"校验脚本里报红"只会是真正的 SQL 写错，而不是方言差异。
+
+注意：SQLite 只是本地校验手段，真实运行环境仍然是 MySQL 8.0
+（生成列、CHECK 约束、行级锁这些特性本脚本只能验语法，不能验行为）。
 """
 import sqlite3
 import re
 
 conn = sqlite3.connect(":memory:")
 cur = conn.cursor()
+
+
+def translate_functions(sql_text: str) -> str:
+    """把 MySQL 专有函数/写法替换成 SQLite 的等价写法"""
+
+    # 日期相减：CURDATE() - INTERVAL 6 DAY  ->  date('now','localtime','-6 days')
+    sql_text = re.sub(
+        r"(CURDATE\(\)|NOW\(\))\s*-\s*INTERVAL\s+(\d+)\s+DAY",
+        lambda m: "date('now','localtime','-{} days')".format(m.group(2)),
+        sql_text, flags=re.IGNORECASE)
+    # 日期相加：+ INTERVAL n DAY（本项目暂时没用到，顺手支持）
+    sql_text = re.sub(
+        r"(CURDATE\(\)|NOW\(\))\s*\+\s*INTERVAL\s+(\d+)\s+DAY",
+        lambda m: "date('now','localtime','+{} days')".format(m.group(2)),
+        sql_text, flags=re.IGNORECASE)
+
+    # 时间差要放在 CURDATE()/NOW() 替换之前做，否则 NOW() 已被换掉、正则匹配不到；
+    # 而且 SQLite 没有 TIMESTAMPDIFF / DATEDIFF，统一用儒略日相减换算。
+    _FACTOR = {"SECOND": 86400, "MINUTE": 1440, "HOUR": 24, "DAY": 1, "MONTH": 1 / 30.44, "YEAR": 1 / 365.25}
+
+    def _diff(unit, a, b):
+        expr = "julianday({1}) - julianday({0})".format(a.strip(), b.strip())
+        f = _FACTOR.get((unit or "DAY").upper(), 1)
+        if f != 1:
+            expr = "(({}) * {:.6f})".format(expr, f)
+        return "CAST({} AS INTEGER)".format(expr)
+
+    ts_head = r"TIMESTAMPDIFF\s*\(\s*(SECOND|MINUTE|HOUR|DAY|MONTH|YEAR)\s*,\s*"
+    # 先处理 TIMESTAMPDIFF(单位, x, NOW())——第三段带括号，要单独匹配
+    sql_text = re.sub(
+        ts_head + r"([^,()]+?)\s*,\s*NOW\s*\(\s*\)\s*\)",
+        lambda m: _diff(m.group(1), m.group(2), "'now','localtime'"),
+        sql_text, flags=re.IGNORECASE)
+    # 再处理两段都不带括号的常规写法
+    sql_text = re.sub(
+        ts_head + r"([^,()]+?)\s*,\s*([^,()]+?)\s*\)",
+        lambda m: _diff(m.group(1), m.group(2), m.group(3)),
+        sql_text, flags=re.IGNORECASE)
+    # DATEDIFF(a, b) 只到"天"，没有单位参数
+    sql_text = re.sub(
+        r"DATEDIFF\s*\(\s*([^,()]+?)\s*,\s*([^,()]+?)\s*\)",
+        lambda m: _diff("DAY", m.group(1), m.group(2)),
+        sql_text, flags=re.IGNORECASE)
+
+    # 当前日期 / 当前时间
+    sql_text = re.sub(r"\bCURDATE\s*\(\s*\)", "date('now','localtime')", sql_text, flags=re.IGNORECASE)
+    sql_text = re.sub(r"\bNOW\s*\(\s*\)", "datetime('now','localtime')", sql_text, flags=re.IGNORECASE)
+
+    # 字符串拼接：CONCAT(a, b) -> (a || b)；本项目里最多两三个参数
+    def _concat(m):
+        parts = [p.strip() for p in m.group(1).split(",")]
+        return "(" + " || ".join(parts) + ")"
+
+    sql_text = re.sub(r"\bCONCAT\s*\(([^()]*)\)", _concat, sql_text, flags=re.IGNORECASE)
+
+    # IF(a,b,c) 在 SQLite 3.48+ 已是内置函数，旧版本退回 IIF
+    if sqlite3.sqlite_version_info < (3, 48, 0):
+        sql_text = re.sub(r"\bIF\s*\(", "IIF(", sql_text, flags=re.IGNORECASE)
+
+    return sql_text
 
 
 def run_mysql_sql_as_sqlite(sql_text: str, label: str):
@@ -22,6 +88,7 @@ def run_mysql_sql_as_sqlite(sql_text: str, label: str):
     # 清理行内注释里的 -- 导致的分句问题
     sql_text = re.sub(r"--[^\n]*", "", sql_text)
     sql_text = sql_text.replace("DATETIME DEFAULT CURRENT_TIMESTAMP", "TEXT DEFAULT CURRENT_TIMESTAMP")
+    sql_text = translate_functions(sql_text)
 
     # 移除 DROP DATABASE / CREATE DATABASE / USE
     lines = []
@@ -79,7 +146,7 @@ print("=" * 60)
 print("【第 3 步】数据核对")
 print("=" * 60)
 tables = ["department", "doctor", "patient", "registration",
-          "medical_record", "medicine", "prescription_detail"]
+          "medical_record", "medicine", "prescription_detail", "admission"]
 for t in tables:
     cur.execute(f"SELECT COUNT(*) FROM {t}")
     print(f"  {t:<22} {cur.fetchone()[0]} 条")
@@ -91,8 +158,9 @@ print("=" * 60)
 with open("03_queries.sql", encoding="utf-8") as f:
     query_sql = f.read()
 
-# 清除 SQL 注释（-- 开头），避免注释与语句粘连
+# 清除 SQL 注释（-- 开头），避免注释与语句粘连，并把 MySQL 专有函数换成 SQLite 等价写法
 query_sql = re.sub(r"--[^\n]*", "", query_sql)
+query_sql = translate_functions(query_sql)
 
 # 逐条执行查询，展示结果
 stmts = [s.strip() for s in query_sql.split(";") if s.strip()]
